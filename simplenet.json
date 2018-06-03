@@ -1,0 +1,13 @@
+{
+  "Layers" : [
+    {
+      "fc_1" : {
+        "Type" : "FullyConnectLayer",
+        "Activation" : "sigmoid",
+        "Input" : null,
+        "OutputSize" :
+      }
+    }
+  ]
+
+}
