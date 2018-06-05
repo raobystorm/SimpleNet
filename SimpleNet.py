@@ -2,9 +2,9 @@
 import numpy as np
 
 
-class FullyConnectedLayer:
+class FCLayer:
     # Usually the weight of fc layer is decided by the input & output's hidden units
-    def __init__(self, output_size, activation, input_size=0, upper_layer=None, drop_rate=1.0):
+    def __init__(self, output_size, input_size=0, upper_layer=None, drop_rate=1.0):
         # Consider input from a conv layer
         self.upper_layer = upper_layer
         if upper_layer:
@@ -12,13 +12,12 @@ class FullyConnectedLayer:
         self.input = None
         self.lower_layer = None
         self.output = np.zeros(output_size)
-        self.weight = np.random.uniform(-0.05, 0.05, (input_size, self.output.size)) + 0.01
+        # self.weight = np.random.randn(input_size, output_size) * np.sqrt(2 / ((input_size) * drop_rate))
+        self.weight = np.random.uniform(-0.001, 0.001, (input_size, output_size))
         self.delta = np.zeros(self.output.size)
-        self.activation = activation
         # Used for drop-out, drop_rate means the proportion of weights we want to use
         self.drop_rate = drop_rate
         self.dropped_mask = np.ones(self.weight.shape, dtype=bool)
-
 
     def forward(self):
         if self.upper_layer:
@@ -26,31 +25,59 @@ class FullyConnectedLayer:
         if self.drop_rate < 1.0:
             self.dropped_mask = np.random.uniform(0, 1, self.weight.shape)
             self.dropped_mask = np.where(self.dropped_mask <= self.drop_rate, 1, 0)
+        self.output = np.dot(self.input, self.weight * self.dropped_mask)
 
-        y = np.dot(self.input, self.weight * self.dropped_mask)
-
-        if self.activation == 'sigmoid':
-            self.output = 1 / (1 + np.exp(-y))
-        if self.activation == 'softmax':
-            exp = np.exp(y)
-            self.output = exp / float(sum(exp))
-
-
-    def backward(self, label=None):
-        if self.activation == 'sigmoid':
-            self.delta += np.dot(self.lower_layer.weight, self.lower_layer.delta) * (self.output * (1 - self.output))
-        # For output layer only, we use label
-        # The loss function is cross entropy loss
-        if self.activation == 'softmax':
-            self.delta -= self.output - label
-
+    def backward(self):
+        raise NotImplementedError
 
     def update_weight(self, learn_rate=0.05):
-        self.weight += np.outer(self.input, self.delta) * self.dropped_mask * learn_rate
+        self.weight -= np.outer(self.input, self.delta) * self.dropped_mask * learn_rate
+
+
+class FullyConnectedLayerSigmoid(FCLayer):
+    def forward(self):
+        super(FullyConnectedLayerSigmoid, self).forward()
+        # self.output = 1 / (1 + np.exp(-self.output))
+
+    def backward(self, label=None):
+        if self.lower_layer:
+            self.delta += np.dot(self.lower_layer.weight, self.lower_layer.delta) * self.output * (1 - self.output)
+        else:
+            self.delta += self.output - label
+
+
+class SoftmaxLayer(FCLayer):
+    def forward(self):
+        super(SoftmaxLayer, self).forward()
+        exp = np.exp(self.output)
+        self.output = exp / sum(exp)
+
+    def backward(self, label=None):
+        self.delta += self.output - label
+
+
+class FullyConnectedLayerReLU(FCLayer):
+    def forward(self):
+        super(FullyConnectedLayerReLU, self).forward()
+        self.dropped_mask = np.where(self.output < 0, False, True)
+        self.output = np.where(self.output < 0, 0., self.output)
+
+    def backward(self):
+        self.delta += np.dot(self.lower_layer.weight, self.lower_layer.delta)
+
+
+def cross_entropy_func(prediction, label):
+    return -sum(label * np.log(prediction))
+
+
+def sum_of_squares_func(prediction, label):
+    return sum((prediction - label)**2) / 2
 
 
 class Network:
-    def __init__(self, layer_sizes, learn_rate=0.03, loss_func='cross-entropy'):
+    def __init__(self, layer_sizes, learn_rate=0.03, loss_func=cross_entropy_func, log_file=None):
+        if log_file:
+            self.log = open(log_file, 'w')
         self.input = np.zeros(layer_sizes[0], dtype=np.float32)
         self.learn_rate = learn_rate
         self.layers = []
@@ -58,9 +85,9 @@ class Network:
         last_layer = None
         for i in range(1, len(layer_sizes)):
             if i == len(layer_sizes) - 1:
-                fc = FullyConnectedLayer(layer_sizes[i], 'softmax', input_size=self.input.size, upper_layer=last_layer, drop_rate=1.)
+                fc = SoftmaxLayer(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, drop_rate=1.)
             else:
-                fc = FullyConnectedLayer(layer_sizes[i], 'sigmoid', input_size=self.input.size, upper_layer=last_layer, drop_rate=0.5)
+                fc = FullyConnectedLayerSigmoid(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, drop_rate=1.)
             last_layer = fc
             self.layers.append(fc)
 
@@ -70,6 +97,8 @@ class Network:
             last_layer = layer
         self.output = self.layers[-1].output
 
+    def __del__(self):
+        self.log.close()
 
     def inference(self, data):
         self.layers[0].input = data
@@ -77,20 +106,18 @@ class Network:
             layer.forward()
         return self.layers[-1].output
 
-
     def train(self, data, label):
         prediction = self.inference(data)
-        for layer in self.layers:
-            layer.backward(label)
-        if self.loss_func == 'cross-entropy':
-            self.loss += -sum(label * np.log(prediction))
+        self.layers[-1].backward(label)
+        for layer in self.layers[:-1]:
+            layer.backward()
         self.output = prediction
+        self.loss += self.loss_func.__call__(prediction, label)
 
     def save_weights(self):
         self.saved_weights = []
         for layer in self.layers:
             self.saved_weights.append(np.copy(layer.weight))
-
 
     def load_weights(self):
         if not self.saved_weights:
@@ -98,21 +125,28 @@ class Network:
         for idx, saved_weight in enumerate(self.saved_weights):
             self.layers[idx].weight = saved_weight
 
-    def is_prediction_correct(self, label):
-        return sum(abs(label - np.where(self.output == np.max(self.output), 1., 0.))) == 0
+    def print_weights(self):
+        for layer in self.layers:
+            print(layer.weight)
 
+    def is_prediction_correct(self, label):
+        return np.array_equal(np.where(self.output == np.max(self.output), 1., 0.), label)
 
     def test_set(self, test_set):
         correct = 0
+        self.reset_drop_mask()
         for test_point in test_set:
-            result = self.inference(test_point[:-1])
-            if self.is_prediction_correct(test_point[:-1]):
+            self.output = self.inference(test_point[:-1])
+            if self.is_prediction_correct(test_point[-1]):
                 correct += 1
         return correct / len(test_set)
 
+    def reset_drop_mask(self):
+        for layer in self.layers:
+            layer.dropped_mask = np.ones(layer.dropped_mask.shape)
 
     def train_set(self, train_set, epochs=10, batch_size=50):
-        max_acc = 0.0
+        min_loss = 999999.
         for _ in range(epochs):
             np.random.shuffle(train_set)
             for iter in range(len(train_set) // batch_size):
@@ -126,22 +160,18 @@ class Network:
                     if self.is_prediction_correct(data[-1]):
                         correct += 1
 
-                print('Current loss is: ' + str(self.loss))
-                acc = correct / batch_size
-                if acc > max_acc:
-                    max_acc = acc
+                self.log.write(str(self.loss) + ',' + str(correct / batch_size) + '\n')
+                if self.loss < min_loss:
+                    min_loss = self.loss
                     self.save_weights()
 
-                print('Current accuracy is: ' + str(correct / batch_size))
                 for layer in self.layers:
                     layer.update_weight(self.learn_rate)
-                print('Lear rate is:' + str(self.learn_rate))
-                print('')
 
 
 def label_iris(train_set):
     label_set = [data[-1] for data in train_set]
-    label_set = list(set(label_set))
+    label_set = sorted(list(set(label_set)))
     for data in train_set:
         idx = label_set.index(data[-1])
         data[-1] = np.zeros(len(label_set))
@@ -160,20 +190,22 @@ def run(args):
     label_iris(train_set)
 
     # For the layer size first one is input size, last one is the label vector size.
-    net = Network([4, 3], learn_rate=0.03)
-    net.train_set(train_set, epochs=10, batch_size=10)
+    net = Network([4, 4, 3], learn_rate=0.01, loss_func=cross_entropy_func, log_file=args.log)
+    net.train_set(train_set, epochs=500, batch_size=30)
 
     print('Finished training! Start testing...')
 
     net.load_weights()
-    acc = net.test_set(np.random.choice(train_set, 30))
+    acc = net.test_set(train_set)
     print('Finished testing! The result accuracy is: ' + str(acc))
+    net.print_weights()
 
 
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=str, help='iris.data file', required=True)
+    parser.add_argument('--log', type=str, help='log file', required=True)
     args = parser.parse_args()
 
     return args
