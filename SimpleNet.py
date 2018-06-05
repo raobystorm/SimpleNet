@@ -50,19 +50,17 @@ class FullyConnectedLayer:
 
 
 class Network:
-    def __init__(self, layer_sizes, learn_rate=0.05, loss_func='cross-entropy'):
+    def __init__(self, layer_sizes, learn_rate=0.03, loss_func='cross-entropy'):
         self.input = np.zeros(layer_sizes[0], dtype=np.float32)
         self.learn_rate = learn_rate
         self.layers = []
         self.loss_func = loss_func
         last_layer = None
-        for i in range(len(layer_sizes)):
+        for i in range(1, len(layer_sizes)):
             if i == len(layer_sizes) - 1:
-                fc = FullyConnectedLayer(layer_sizes[i], 'softmax', upper_layer=last_layer, drop_rate=1.)
-            elif i == 0:
-                fc = FullyConnectedLayer(layer_sizes[i], 'sigmoid', input_size=self.input.size, drop_rate=1.)
+                fc = FullyConnectedLayer(layer_sizes[i], 'softmax', input_size=self.input.size, upper_layer=last_layer, drop_rate=1.)
             else:
-                fc = FullyConnectedLayer(layer_sizes[i], 'sigmoid', upper_layer=last_layer, drop_rate=1.)
+                fc = FullyConnectedLayer(layer_sizes[i], 'sigmoid', input_size=self.input.size, upper_layer=last_layer, drop_rate=0.5)
             last_layer = fc
             self.layers.append(fc)
 
@@ -88,8 +86,33 @@ class Network:
             self.loss += -sum(label * np.log(prediction))
         self.output = prediction
 
+    def save_weights(self):
+        self.saved_weights = []
+        for layer in self.layers:
+            self.saved_weights.append(np.copy(layer.weight))
 
-    def train_set(self, train_set, epochs=10, batch_size=30):
+
+    def load_weights(self):
+        if not self.saved_weights:
+            return
+        for idx, saved_weight in enumerate(self.saved_weights):
+            self.layers[idx].weight = saved_weight
+
+    def is_prediction_correct(self, label):
+        return sum(abs(label - np.where(self.output == np.max(self.output), 1., 0.))) == 0
+
+
+    def test_set(self, test_set):
+        correct = 0
+        for test_point in test_set:
+            result = self.inference(test_point[:-1])
+            if self.is_prediction_correct(test_point[:-1]):
+                correct += 1
+        return correct / len(test_set)
+
+
+    def train_set(self, train_set, epochs=10, batch_size=50):
+        max_acc = 0.0
         for _ in range(epochs):
             np.random.shuffle(train_set)
             for iter in range(len(train_set) // batch_size):
@@ -100,13 +123,20 @@ class Network:
                 for data in train_set[ iter*batch_size : (iter + 1)*batch_size]:
                     self.train(data[:-1], data[-1])
                     # binarize output and minus the label to see if prediction is correct
-                    if sum(abs(data[-1] - np.where(self.output == np.max(self.output), 1., 0.))) == 0:
+                    if self.is_prediction_correct(data[-1]):
                         correct += 1
 
                 print('Current loss is: ' + str(self.loss))
+                acc = correct / batch_size
+                if acc > max_acc:
+                    max_acc = acc
+                    self.save_weights()
+
                 print('Current accuracy is: ' + str(correct / batch_size))
                 for layer in self.layers:
                     layer.update_weight(self.learn_rate)
+                print('Lear rate is:' + str(self.learn_rate))
+                print('')
 
 
 def label_iris(train_set):
@@ -124,13 +154,20 @@ def run(args):
         for line in f.readlines():
             data = list(map(float, line.split(',')[:-1]))
             label = line.split(',')[-1]
-            data .append(label)
+            data.append(label)
             train_set.append(data)
 
     label_iris(train_set)
 
-    net = Network([4, 3])
-    net.train_set(train_set, epochs=30, batch_size=10)
+    # For the layer size first one is input size, last one is the label vector size.
+    net = Network([4, 3], learn_rate=0.03)
+    net.train_set(train_set, epochs=10, batch_size=10)
+
+    print('Finished training! Start testing...')
+
+    net.load_weights()
+    acc = net.test_set(np.random.choice(train_set, 30))
+    print('Finished testing! The result accuracy is: ' + str(acc))
 
 
 def parse_args():
