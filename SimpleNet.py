@@ -117,13 +117,18 @@ class Network:
         self.loss_func = loss_func
         last_layer = None
         for i in range(1, len(layer_sizes)):
+            # For this is the output layer, use activation according to their loss function
             if i == len(layer_sizes) - 1:
-                fc = COCOLossLayer(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, drop_rate=1., centers=centers)
+                if loss_func == cross_entropy_func:
+                    fc = SoftmaxLayer(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer)
+                elif loss_func == sum_of_squares_func:
+                    fc = FullyConnectedLayerSigmoid(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer)
+                elif loss_func == congenerous_cosine_func:
+                    fc = COCOLossLayer(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, centers=centers)
             else:
                 fc = FullyConnectedLayerSigmoid(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, drop_rate=1.)
             last_layer = fc
             self.layers.append(fc)
-
         last_layer = self.layers[-1]
         for layer in reversed(self.layers[:-1]):
             layer.lower_layer = last_layer
