@@ -12,8 +12,8 @@ class FCLayer:
         self.input = None
         self.lower_layer = None
         self.output = np.zeros(output_size)
-        # self.weight = np.random.randn(input_size, output_size) * np.sqrt(2 / ((input_size) * drop_rate))
-        self.weight = np.random.uniform(-0.001, 0.001, (input_size, output_size))
+        # self.weight = np.ones((input_size, output_size)) * np.sqrt(2 / (input_size)) + 0.1
+        self.weight = np.random.randn(input_size, output_size) * np.sqrt(2 / ((input_size) * drop_rate))
         self.delta = np.zeros(self.output.size)
         # Used for drop-out, drop_rate means the proportion of weights we want to use
         self.drop_rate = drop_rate
@@ -37,11 +37,11 @@ class FCLayer:
 class FullyConnectedLayerSigmoid(FCLayer):
     def forward(self):
         super(FullyConnectedLayerSigmoid, self).forward()
-        # self.output = 1 / (1 + np.exp(-self.output))
+        self.output = 1 / (1 + np.exp(-self.output))
 
     def backward(self, label=None):
         if self.lower_layer:
-            self.delta += np.dot(self.lower_layer.weight, self.lower_layer.delta) * self.output * (1 - self.output)
+            self.delta += np.dot(self.lower_layer.weight, self.lower_layer.delta) * (self.output * (1 - self.output))
         else:
             self.delta += self.output - label
 
@@ -75,12 +75,12 @@ def sum_of_squares_func(prediction, label):
 
 
 class Network:
-    def __init__(self, layer_sizes, learn_rate=0.03, loss_func=cross_entropy_func, log_file=None):
-        if log_file:
-            self.log = open(log_file, 'w')
+    def __init__(self, layer_sizes, learn_rate=0.03, loss_func=cross_entropy_func):
         self.input = np.zeros(layer_sizes[0], dtype=np.float32)
         self.learn_rate = learn_rate
         self.layers = []
+        self.train_log = []
+        self.loss = 0.0
         self.loss_func = loss_func
         last_layer = None
         for i in range(1, len(layer_sizes)):
@@ -97,9 +97,6 @@ class Network:
             last_layer = layer
         self.output = self.layers[-1].output
 
-    def __del__(self):
-        self.log.close()
-
     def inference(self, data):
         self.layers[0].input = data
         for layer in self.layers:
@@ -114,6 +111,14 @@ class Network:
         self.output = prediction
         self.loss += self.loss_func.__call__(prediction, label)
 
+    def update_weights(self):
+        for layer in self.layers:
+            layer.update_weight(self.learn_rate)
+
+    def reset_deltas(self):
+        for layer in self.layers:
+            layer.delta = np.zeros(layer.output.shape)
+
     def save_weights(self):
         self.saved_weights = []
         for layer in self.layers:
@@ -127,7 +132,18 @@ class Network:
 
     def print_weights(self):
         for layer in self.layers:
+            print(str(layer))
             print(layer.weight)
+
+    def print_layer_outputs(self):
+        for layer in self.layers:
+            print(str(layer))
+            print(layer.output)
+
+    def print_deltas(self):
+        for layer in self.layers:
+            print(str(layer))
+            print(layer.delta)
 
     def is_prediction_correct(self, label):
         return np.array_equal(np.where(self.output == np.max(self.output), 1., 0.), label)
@@ -147,67 +163,65 @@ class Network:
 
     def train_set(self, train_set, epochs=10, batch_size=50):
         min_loss = 999999.
+        self.train_log = []
         for _ in range(epochs):
             np.random.shuffle(train_set)
             for iter in range(len(train_set) // batch_size):
                 self.loss = 0.0
                 correct = 0
-                for layer in self.layers:
-                    layer.delta = np.zeros(layer.delta.shape, dtype=np.float32)
+                self.reset_deltas()
                 for data in train_set[ iter*batch_size : (iter + 1)*batch_size]:
                     self.train(data[:-1], data[-1])
                     # binarize output and minus the label to see if prediction is correct
                     if self.is_prediction_correct(data[-1]):
                         correct += 1
 
-                self.log.write(str(self.loss) + ',' + str(correct / batch_size) + '\n')
+                self.train_log.append(self.loss)
                 if self.loss < min_loss:
                     min_loss = self.loss
                     self.save_weights()
-
-                for layer in self.layers:
-                    layer.update_weight(self.learn_rate)
+                self.update_weights()
 
 
-def label_iris(train_set):
-    label_set = [data[-1] for data in train_set]
-    label_set = sorted(list(set(label_set)))
-    for data in train_set:
-        idx = label_set.index(data[-1])
-        data[-1] = np.zeros(len(label_set))
-        data[-1][idx] = 1
+    def evaluate(self, input, epochs=500, batch_size=30):
+        train_set, test_set = prepare_dataset_iris(input)
+        self.train_set(train_set, epochs=epochs, batch_size=batch_size)
+        print('Finished training! Start testing...')
+
+        self.load_weights()
+        acc = self.test_set(test_set)
+        print('Finished testing! The result accuracy is: ' + str(acc))
+        self.print_weights()
 
 
-def run(args):
+def prepare_dataset_iris(input):
     train_set = []
-    with open(args.input, 'r') as f:
+    with open(input, 'r') as f:
         for line in f.readlines():
             data = list(map(float, line.split(',')[:-1]))
             label = line.split(',')[-1]
             data.append(label)
             train_set.append(data)
 
-    label_iris(train_set)
-
-    # For the layer size first one is input size, last one is the label vector size.
-    net = Network([4, 4, 3], learn_rate=0.01, loss_func=cross_entropy_func, log_file=args.log)
-    net.train_set(train_set, epochs=500, batch_size=30)
-
-    print('Finished training! Start testing...')
-
-    net.load_weights()
-    acc = net.test_set(train_set)
-    print('Finished testing! The result accuracy is: ' + str(acc))
-    net.print_weights()
+    label_set = [data[-1] for data in train_set]
+    label_set = sorted(list(set(label_set)))
+    for data in train_set:
+        idx = label_set.index(data[-1])
+        data[-1] = np.zeros(len(label_set))
+        data[-1][idx] = 1
+    cnt = len(train_set)
+    return train_set[:int(cnt*0.9)], train_set[int(cnt*0.9):]
 
 
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', type=str, help='iris.data file', required=True)
-    parser.add_argument('--log', type=str, help='log file', required=True)
     args = parser.parse_args()
 
     return args
 
-run(parse_args())
+
+def run(args):
+    net = Network([4, 3], learn_rate=0.03)
+    net.evaluate(args.input)
