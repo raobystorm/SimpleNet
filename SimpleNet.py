@@ -56,6 +56,29 @@ class SoftmaxLayer(FCLayer):
         self.delta += self.output - label
 
 
+class COCOLossLayer(FCLayer):
+    def __init__(self, output_size, input_size, upper_layer, drop_rate, centers):
+        super(COCOLossLayer, self).__init__(output_size, input_size, upper_layer, drop_rate)
+        self.centers = centers
+
+    def forward(self):
+        super(COCOLossLayer, self).forward()
+        self.output = self.output / np.linalg.norm(self.output)
+        deno = 0.
+        for center in self.centers:
+            deno += np.exp(np.dot(center.T, self.output))
+        exp = []
+        for center in sorted(self.centers.keys()):
+            exp.append(np.exp(np.dot(self.centers[center].T, self.output)))
+        self.output = np.asarray(exp)
+
+    def backward(self, label=None):
+        update_delta = []
+        for center in sorted(self.centers.keys()):
+            update_delta.append(np.dot(self.output - label, center))
+        self.delta += update_delta
+
+
 class FullyConnectedLayerReLU(FCLayer):
     def forward(self):
         super(FullyConnectedLayerReLU, self).forward()
@@ -74,8 +97,18 @@ def sum_of_squares_func(prediction, label):
     return sum((prediction - label)**2) / 2
 
 
+def congenerous_cosine_similarity(ci, cj):
+    ci = np.asarray(ci, dtype=np.float32)
+    cj = np.asarray(cj, dtype=np.float32)
+    return np.dot(ci.T, cj) / (np.linalg.norm(ci) * np.linalg.norm(cj))
+
+
+def congenerous_cosine_func(prediction, label):
+    return -sum(label * np.log(prediction))
+
+
 class Network:
-    def __init__(self, layer_sizes, learn_rate=0.03, loss_func=cross_entropy_func):
+    def __init__(self, layer_sizes, learn_rate=0.03, loss_func=cross_entropy_func, centers=None):
         self.input = np.zeros(layer_sizes[0], dtype=np.float32)
         self.learn_rate = learn_rate
         self.layers = []
@@ -85,7 +118,7 @@ class Network:
         last_layer = None
         for i in range(1, len(layer_sizes)):
             if i == len(layer_sizes) - 1:
-                fc = SoftmaxLayer(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, drop_rate=1.)
+                fc = COCOLossLayer(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, drop_rate=1., centers=centers)
             else:
                 fc = FullyConnectedLayerSigmoid(layer_sizes[i], input_size=self.input.size, upper_layer=last_layer, drop_rate=1.)
             last_layer = fc
@@ -164,6 +197,9 @@ class Network:
     def train_set(self, train_set, epochs=10, batch_size=50):
         min_loss = 999999.
         self.train_log = []
+        if self.loss_func == congenerous_cosine_func:
+            loss_center = compute_coco_center(train_set)
+
         for _ in range(epochs):
             np.random.shuffle(train_set)
             for iter in range(len(train_set) // batch_size):
@@ -192,6 +228,21 @@ class Network:
         acc = self.test_set(test_set)
         print('Finished testing! The result accuracy is: ' + str(acc))
         self.print_weights()
+
+
+def compute_coco_center(train_set):
+    clusters = {}
+    centers = {}
+    for data in train_set:
+        if str(data[-1]) not in clusters:
+            clusters[str(data[-1])] = []
+        clusters[str(data[-1])].append(data[:-1])
+
+    for str_c, cluster in clusters:
+        raw_center = np.mean(cluster, axis=0)
+        centers[str_c] = np.asarray(raw_center / np.linalg.norm(raw_center))
+
+    return centers
 
 
 def prepare_dataset_iris(input):
