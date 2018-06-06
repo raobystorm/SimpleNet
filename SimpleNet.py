@@ -57,24 +57,26 @@ class SoftmaxLayer(FCLayer):
 
 
 class COCOLossLayer(FCLayer):
-    def __init__(self, output_size, input_size, upper_layer, drop_rate, centers):
-        super(COCOLossLayer, self).__init__(output_size, input_size, upper_layer, drop_rate)
+    def __init__(self, output_size, input_size, upper_layer, centers):
+        super(COCOLossLayer, self).__init__(output_size, input_size, upper_layer, drop_rate=1.)
         self.centers = centers
 
     def forward(self):
         super(COCOLossLayer, self).forward()
-        self.output = self.output / np.linalg.norm(self.output)
+        norm_input = self.input / np.linalg.norm(self.input)
         deno = 0.
-        for center in self.centers:
-            deno += np.exp(np.dot(center.T, self.output))
+        for _, center in self.centers.items():
+            deno += np.exp(np.dot(center.T, norm_input))
         exp = []
         for center in sorted(self.centers.keys()):
-            exp.append(np.exp(np.dot(self.centers[center].T, self.output)))
-        self.output = np.asarray(exp)
+            print(center)
+            exp.append(np.exp(np.dot(self.centers[center].T, norm_input)))
+        self.output = np.asarray(exp, dtype=np.float32)
 
     def backward(self, label=None):
         update_delta = []
         for center in sorted(self.centers.keys()):
+            print(center)
             update_delta.append(np.dot(self.output - label, center))
         self.delta += update_delta
 
@@ -243,9 +245,9 @@ def compute_coco_center(train_set):
             clusters[str(data[-1])] = []
         clusters[str(data[-1])].append(data[:-1])
 
-    for str_c, cluster in clusters:
+    for str_c, cluster in clusters.items():
         raw_center = np.mean(cluster, axis=0)
-        centers[str_c] = np.asarray(raw_center / np.linalg.norm(raw_center))
+        centers[str_c] = np.asarray(raw_center / np.linalg.norm(raw_center), dtype=np.float32)
 
     return centers
 
@@ -263,7 +265,7 @@ def prepare_dataset_iris(input):
     label_set = sorted(list(set(label_set)))
     for data in train_set:
         idx = label_set.index(data[-1])
-        data[-1] = np.zeros(len(label_set))
+        data[-1] = np.zeros(len(label_set), dtype=np.float32)
         data[-1][idx] = 1
 
     np.random.shuffle(train_set)
