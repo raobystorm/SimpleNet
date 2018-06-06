@@ -265,6 +265,8 @@ def prepare_dataset_iris(input):
         idx = label_set.index(data[-1])
         data[-1] = np.zeros(len(label_set))
         data[-1][idx] = 1
+
+    np.random.shuffle(train_set)
     cnt = len(train_set)
     return train_set[:int(cnt*0.9)], train_set[int(cnt*0.9):]
 
