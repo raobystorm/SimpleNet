@@ -57,9 +57,11 @@ class SoftmaxLayer(FCLayer):
 
 
 class COCOLossLayer(FCLayer):
-    def __init__(self, output_size, input_size, upper_layer, centers):
+    def __init__(self, output_size, input_size, upper_layer, centers, alpha=0.1):
         super(COCOLossLayer, self).__init__(output_size, input_size, upper_layer, drop_rate=1.)
         self.centers = centers
+        # this is the hyper parameter for coco loss
+        self.alpha = alpha
 
     def forward(self):
         super(COCOLossLayer, self).forward()
@@ -69,16 +71,15 @@ class COCOLossLayer(FCLayer):
             deno += np.exp(np.dot(center.T, norm_input))
         exp = []
         for center in sorted(self.centers.keys()):
-            print(center)
             exp.append(np.exp(np.dot(self.centers[center].T, norm_input)))
         self.output = np.asarray(exp, dtype=np.float32)
 
     def backward(self, label=None):
-        update_delta = []
+        center_matrix = []
         for center in sorted(self.centers.keys()):
-            print(center)
-            update_delta.append(np.dot(self.output - label, center))
-        self.delta += update_delta
+            center_matrix.append(self.centers[center])
+        center_matrix = np.transpose(np.asarray(center_matrix, dtype=np.float32))
+        self.delta += np.dot(center_matrix, self.output - label)
 
 
 class FullyConnectedLayerReLU(FCLayer):
@@ -206,19 +207,17 @@ class Network:
         self.train_log = []
         if self.loss_func == congenerous_cosine_func:
             loss_center = compute_coco_center(train_set)
-
         for _ in range(epochs):
             np.random.shuffle(train_set)
             for iter in range(len(train_set) // batch_size):
                 self.loss = 0.0
                 correct = 0
                 self.reset_deltas()
-                for data in train_set[ iter*batch_size : (iter + 1)*batch_size]:
+                for data in train_set[iter*batch_size : (iter + 1)*batch_size]:
                     self.train(data[:-1], data[-1])
                     # binarize output and minus the label to see if prediction is correct
                     if self.is_prediction_correct(data[-1]):
                         correct += 1
-
                 self.train_log.append(self.loss)
                 if self.loss < min_loss:
                     min_loss = self.loss
@@ -230,7 +229,6 @@ class Network:
         train_set, test_set = prepare_dataset_iris(input)
         self.train_set(train_set, epochs=epochs, batch_size=batch_size)
         print('Finished training! Start testing...')
-
         self.load_weights()
         acc = self.test_set(test_set)
         print('Finished testing! The result accuracy is: ' + str(acc))
@@ -244,11 +242,9 @@ def compute_coco_center(train_set):
         if str(data[-1]) not in clusters:
             clusters[str(data[-1])] = []
         clusters[str(data[-1])].append(data[:-1])
-
     for str_c, cluster in clusters.items():
         raw_center = np.mean(cluster, axis=0)
         centers[str_c] = np.asarray(raw_center / np.linalg.norm(raw_center), dtype=np.float32)
-
     return centers
 
 
